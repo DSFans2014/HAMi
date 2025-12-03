@@ -221,6 +221,7 @@ func (s *Scheduler) Start() error {
 	informerFactory.WaitForCacheSync(s.stopCh)
 	cache.WaitForCacheSync(s.stopCh, podEventHandlerRegistration.HasSynced, nodeEventHandlerRegistration.HasSynced, resourceQuotaEventHandlerRegistration.HasSynced)
 	s.addAllEventHandlers()
+	s.RefreshNode()
 	atomic.StoreUint32(&s.started, 1)
 	return nil
 }
@@ -233,12 +234,8 @@ func (s *Scheduler) RegisterFromNodeAnnotations() {
 	klog.InfoS("Entering RegisterFromNodeAnnotations")
 	defer klog.InfoS("Exiting RegisterFromNodeAnnotations")
 
-	labelSelector := labels.Set(config.NodeLabelSelector).AsSelector()
-	klog.InfoS("Using label selector for list nodes", "selector", labelSelector.String())
-
 	ticker := time.NewTicker(time.Second * 15)
 	defer ticker.Stop()
-	printedLog := map[string]bool{}
 	for {
 		select {
 		case <-s.nodeNotify:
@@ -253,66 +250,71 @@ func (s *Scheduler) RegisterFromNodeAnnotations() {
 			klog.InfoS("Received stop signal, exiting RegisterFromNodeAnnotations")
 			return
 		}
-		rawNodes, err := s.nodeLister.List(labelSelector)
-		if err != nil {
-			klog.ErrorS(err, "Failed to list nodes with selector", "selector", labelSelector.String())
-			continue
-		}
-		klog.V(5).InfoS("Listed nodes", "nodeCount", len(rawNodes))
-		var nodeNames []string
-		for _, val := range rawNodes {
-			nodeNames = append(nodeNames, val.Name)
-			klog.V(5).InfoS("Processing node", "nodeName", val.Name)
+		s.RefreshNode()
+	}
+}
 
-			for devhandsk, devInstance := range device.GetDevices() {
-				klog.V(5).InfoS("Checking device health", "nodeName", val.Name, "deviceVendor", devhandsk)
+func (s *Scheduler) RefreshNode() {
+	labelSelector := labels.Set(config.NodeLabelSelector).AsSelector()
+	klog.InfoS("Using label selector for list nodes", "selector", labelSelector.String())
 
-				nodedevices, err := devInstance.GetNodeDevices(*val)
+	rawNodes, err := s.nodeLister.List(labelSelector)
+	if err != nil {
+		klog.ErrorS(err, "Failed to list nodes with selector", "selector", labelSelector.String())
+		return
+	}
+	klog.V(5).InfoS("Listed nodes", "nodeCount", len(rawNodes))
+	var nodeNames []string
+	for _, val := range rawNodes {
+		nodeNames = append(nodeNames, val.Name)
+		klog.V(5).InfoS("Processing node", "nodeName", val.Name)
+
+		for devhandsk, devInstance := range device.GetDevices() {
+			klog.V(5).InfoS("Checking device health", "nodeName", val.Name, "deviceVendor", devhandsk)
+
+			nodedevices, err := devInstance.GetNodeDevices(*val)
+			if err != nil {
+				klog.V(5).InfoS("Failed to get node devices", "nodeName", val.Name, "deviceVendor", devhandsk)
+				continue
+			}
+
+			health, needUpdate := devInstance.CheckHealth(devhandsk, val)
+			klog.V(5).InfoS("Device health check result", "nodeName", val.Name, "deviceVendor", devhandsk, "health", health, "needUpdate", needUpdate)
+
+			if !health {
+				klog.Warning("Device is unhealthy, cleaning up node", "nodeName", val.Name, "deviceVendor", devhandsk)
+				err := devInstance.NodeCleanUp(val.Name)
 				if err != nil {
-					klog.V(5).InfoS("Failed to get node devices", "nodeName", val.Name, "deviceVendor", devhandsk)
-					continue
+					klog.ErrorS(err, "Node cleanup failed", "nodeName", val.Name, "deviceVendor", devhandsk)
 				}
 
-				health, needUpdate := devInstance.CheckHealth(devhandsk, val)
-				klog.V(5).InfoS("Device health check result", "nodeName", val.Name, "deviceVendor", devhandsk, "health", health, "needUpdate", needUpdate)
-
-				if !health {
-					klog.Warning("Device is unhealthy, cleaning up node", "nodeName", val.Name, "deviceVendor", devhandsk)
-					err := devInstance.NodeCleanUp(val.Name)
-					if err != nil {
-						klog.ErrorS(err, "Node cleanup failed", "nodeName", val.Name, "deviceVendor", devhandsk)
-					}
-
-					s.rmNodeDevices(val.Name, devhandsk)
-					continue
-				}
-				if !needUpdate {
-					klog.V(5).InfoS("No update needed for device", "nodeName", val.Name, "deviceVendor", devhandsk)
-					continue
-				}
-				nodeInfo := &device.NodeInfo{}
-				nodeInfo.ID = val.Name
-				nodeInfo.Node = val
-				klog.V(5).InfoS("Fetching node devices", "nodeName", val.Name, "deviceVendor", devhandsk)
-				nodeInfo.Devices = make(map[string][]device.DeviceInfo, 0)
-				for _, deviceinfo := range nodedevices {
-					nodeInfo.Devices[deviceinfo.DeviceVendor] = append(nodeInfo.Devices[deviceinfo.DeviceVendor], *deviceinfo)
-				}
-				s.addNode(val.Name, nodeInfo)
-				if s.nodes[val.Name] != nil && len(nodeInfo.Devices) > 0 {
-					if printedLog[val.Name] {
-						klog.V(5).InfoS("Node device updated", "nodeName", val.Name, "deviceVendor", devhandsk, "nodeInfo", nodeInfo, "totalDevices", s.nodes[val.Name].Devices)
-					} else {
-						klog.InfoS("Node device added", "nodeName", val.Name, "deviceVendor", devhandsk, "nodeInfo", nodeInfo, "totalDevices", s.nodes[val.Name].Devices)
-						printedLog[val.Name] = true
-					}
-				}
+				s.rmNodeDevices(val.Name, devhandsk)
+				continue
+			}
+			if !needUpdate {
+				klog.V(5).InfoS("No update needed for device", "nodeName", val.Name, "deviceVendor", devhandsk)
+				continue
+			}
+			nodeInfo := &device.NodeInfo{}
+			nodeInfo.ID = val.Name
+			nodeInfo.Node = val
+			klog.V(5).InfoS("Fetching node devices", "nodeName", val.Name, "deviceVendor", devhandsk)
+			nodeInfo.Devices = make(map[string][]device.DeviceInfo, 0)
+			for _, deviceinfo := range nodedevices {
+				nodeInfo.Devices[deviceinfo.DeviceVendor] = append(nodeInfo.Devices[deviceinfo.DeviceVendor], *deviceinfo)
+			}
+			_, err = s.GetNode(nodeInfo.ID)
+			s.addNode(val.Name, nodeInfo)
+			if err != nil && len(nodeInfo.Devices) > 0 {
+				klog.V(5).InfoS("Node device updated", "nodeName", val.Name, "deviceVendor", devhandsk, "nodeInfo", nodeInfo, "totalDevices", s.nodes[val.Name].Devices)
+			} else {
+				klog.InfoS("Node device added", "nodeName", val.Name, "deviceVendor", devhandsk, "nodeInfo", nodeInfo, "totalDevices", s.nodes[val.Name].Devices)
 			}
 		}
-		_, _, err = s.getNodesUsage(&nodeNames, nil)
-		if err != nil {
-			klog.ErrorS(err, "Failed to get node usage", "nodeNames", nodeNames)
-		}
+	}
+	_, _, err = s.getNodesUsage(&nodeNames, nil)
+	if err != nil {
+		klog.ErrorS(err, "Failed to get node usage", "nodeNames", nodeNames)
 	}
 }
 
