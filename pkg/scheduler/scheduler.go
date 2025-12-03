@@ -305,10 +305,12 @@ func (s *Scheduler) RefreshNode() {
 			}
 			_, err = s.GetNode(nodeInfo.ID)
 			s.addNode(val.Name, nodeInfo)
-			if err != nil && len(nodeInfo.Devices) > 0 {
-				klog.V(5).InfoS("Node device updated", "nodeName", val.Name, "deviceVendor", devhandsk, "nodeInfo", nodeInfo, "totalDevices", s.nodes[val.Name].Devices)
-			} else {
-				klog.InfoS("Node device added", "nodeName", val.Name, "deviceVendor", devhandsk, "nodeInfo", nodeInfo, "totalDevices", s.nodes[val.Name].Devices)
+			if len(nodeInfo.Devices) > 0 {
+				if err == nil {
+					klog.V(5).InfoS("Node device updated", "nodeName", val.Name, "deviceVendor", devhandsk, "nodeInfo", nodeInfo, "totalDevices", s.nodes[val.Name].Devices)
+				} else {
+					klog.InfoS("Node device added", "nodeName", val.Name, "deviceVendor", devhandsk, "nodeInfo", nodeInfo, "totalDevices", s.nodes[val.Name].Devices)
+				}
 			}
 		}
 	}
