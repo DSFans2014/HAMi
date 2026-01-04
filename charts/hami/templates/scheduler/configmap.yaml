@@ -26,6 +26,7 @@ data:
                 {{- end }}
                 "filterVerb": "filter",
                 "bindVerb": "bind",
+                "preemptVerb": "preempt",
                 "weight": 1,
                 "nodeCacheCapable": true,
                 "httpTimeout": 30000000000,

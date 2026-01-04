@@ -78,6 +78,39 @@ func PredicateRoute(s *scheduler.Scheduler) httprouter.Handle {
 	}
 }
 
+func Preempt(s *scheduler.Scheduler) httprouter.Handle {
+	klog.Infoln("Initializing Preempt handler")
+	return func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+		klog.Infoln("Entering Preempt handler")
+		var buf bytes.Buffer
+		body := io.TeeReader(r.Body, &buf)
+		var extenderPreemptionArgs extenderv1.ExtenderPreemptionArgs
+		var extenderPreemptionResult *extenderv1.ExtenderPreemptionResult
+
+		if err := json.NewDecoder(body).Decode(&extenderPreemptionArgs); err != nil {
+			klog.ErrorS(err, "Failed to decode extender preempt arguments")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(err.Error()))
+		} else {
+			klog.InfoS("Received preempt request", "args", extenderPreemptionArgs)
+			extenderPreemptionResult = &extenderv1.ExtenderPreemptionResult{}
+			if response, err := json.Marshal(extenderPreemptionResult); err != nil {
+				klog.ErrorS(err, "Failed to marshal preemtion result", "result", extenderPreemptionResult)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				errMsg := fmt.Sprintf("{'error':'%s'}", err.Error())
+				w.Write([]byte(errMsg))
+			} else {
+				klog.InfoS("Returning preemption response", "result", extenderPreemptionResult)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				w.Write(response)
+			}
+		}
+	}
+}
+
 func Bind(s *scheduler.Scheduler) httprouter.Handle {
 	return func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 		klog.Infoln("Entering Bind handler")

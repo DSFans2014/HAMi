@@ -127,6 +127,7 @@ func start() error {
 	router := httprouter.New()
 	router.POST("/filter", routes.PredicateRoute(sher))
 	router.POST("/bind", routes.Bind(sher))
+	router.POST("/preempt", routes.Preempt(sher))
 	router.POST("/webhook", routes.WebHookRoute())
 	router.GET("/healthz", routes.HealthzRoute())
 	klog.Info("listen on ", config.HTTPBind)
