@@ -33,6 +33,9 @@ mluResourceName: "cambricon.com/vmlu"
 mluResourceMem: "cambricon.com/mlu.smlu.vmemory"
 mluResourceCores: "cambricon.com/mlu.smlu.vcore"
 
+#Vastai Parameters
+vastaiResourceName: "vastaitech.com/va"
+
 #Hygon DCU Parameters
 dcuResourceName: "hygon.com/dcunum"
 dcuResourceMem: "hygon.com/dcumem"
@@ -432,6 +435,10 @@ devices:
     enabled: true
     customresources:
       - mthreads.com/vgpu
+  vastai:
+    enabled: true
+    customresources:
+      - vastaitech.com/va
   nvidia:
     gpuCorePolicy: default
     libCudaLogLevel: 1
