@@ -447,6 +447,8 @@ func (nv *NvidiaDevicePlugin) GetContainerDeviceStrArray(c device.ContainerDevic
 			position, needsreset = nv.GenerateMigTemplate(devtype, devindex, val)
 			if needsreset {
 				nv.ApplyMigTemplate()
+				klog.Infoln("generage spec file")
+				nv.cdiHandler.CreateSpecFile()
 			}
 			tmp = append(tmp, GetMigUUIDFromIndex(val.UUID, position))
 		}
