@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
+	spec "github.com/NVIDIA/k8s-device-plugin/api/config/v1"
 	"golang.org/x/net/context"
 	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
@@ -447,9 +448,13 @@ func (nv *NvidiaDevicePlugin) GetContainerDeviceStrArray(c device.ContainerDevic
 			position, needsreset = nv.GenerateMigTemplate(devtype, devindex, val)
 			if needsreset {
 				nv.ApplyMigTemplate()
-				klog.V(3).Infoln("generage spec file")
-				if err := nv.cdiHandler.CreateSpecFile(); err != nil {
-					klog.Errorf("failed to create CDI spec file: %v", err)
+				if nv.deviceListStrategies.Includes(spec.DeviceListStrategyVolumeMounts) ||
+					nv.deviceListStrategies.Includes(spec.DeviceListStrategyCDIAnnotations) ||
+					nv.deviceListStrategies.Includes(spec.DeviceListStrategyCDICRI) {
+					klog.V(3).Infoln("generage spec file")
+					if err := nv.cdiHandler.CreateSpecFile(); err != nil {
+						klog.Errorf("failed to create CDI spec file: %v", err)
+					}
 				}
 			}
 			tmp = append(tmp, GetMigUUIDFromIndex(val.UUID, position))
