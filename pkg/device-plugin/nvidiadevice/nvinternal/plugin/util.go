@@ -447,8 +447,10 @@ func (nv *NvidiaDevicePlugin) GetContainerDeviceStrArray(c device.ContainerDevic
 			position, needsreset = nv.GenerateMigTemplate(devtype, devindex, val)
 			if needsreset {
 				nv.ApplyMigTemplate()
-				klog.Infoln("generage spec file")
-				nv.cdiHandler.CreateSpecFile()
+				klog.V(3).Infoln("generage spec file")
+				if err := nv.cdiHandler.CreateSpecFile(); err != nil {
+					klog.Errorf("failed to create CDI spec file: %v", err)
+				}
 			}
 			tmp = append(tmp, GetMigUUIDFromIndex(val.UUID, position))
 		}
