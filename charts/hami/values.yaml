@@ -352,6 +352,7 @@ devicePlugin:
               "uuid": [],
               "index": []
             }
+            "enablegetpreferredallocation": false
           }
         ]
       }

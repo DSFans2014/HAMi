@@ -77,9 +77,10 @@ const (
 )
 
 var (
-	hostHookPath  string
-	ConfigFile    *string
-	getPendingPod = util.GetPendingPod
+	hostHookPath                 string
+	ConfigFile                   *string
+	getPendingPod                = util.GetPendingPod
+	enableGetPreferredAllocation bool
 )
 
 func init() {
@@ -142,6 +143,7 @@ func readFromConfigFile(sConfig *nvidia.NvidiaConfig, path string) (string, erro
 			if len(val.OperatingMode) > 0 {
 				mode = val.OperatingMode
 			}
+			enableGetPreferredAllocation = val.EnableGetPreferredAllocation
 			klog.Infof("FilterDevice: %v", val.FilterDevice)
 		}
 	}
@@ -430,7 +432,7 @@ func (plugin *NvidiaDevicePlugin) Register(kubeletSocket string) error {
 		Endpoint:     path.Base(plugin.socket),
 		ResourceName: string(plugin.rm.Resource()),
 		Options: &kubeletdevicepluginv1beta1.DevicePluginOptions{
-			GetPreferredAllocationAvailable: true,
+			GetPreferredAllocationAvailable: enableGetPreferredAllocation,
 		},
 	}
 
@@ -492,26 +494,17 @@ func (plugin *NvidiaDevicePlugin) GetPreferredAllocation(ctx context.Context, r 
 	}
 
 	for idx, req := range r.ContainerRequests {
-		var (
-			devices []string
-			err     error
-		)
-
 		if idx < len(nonEmptyAnnotations) {
-			devices, err = plugin.selectPreferredDeviceIDsFromAnnotatedDevices(req.AvailableDeviceIDs, req.MustIncludeDeviceIDs, nonEmptyAnnotations[idx], int(req.AllocationSize))
-			if err != nil {
-				devices, err = plugin.rm.GetPreferredAllocation(req.AvailableDeviceIDs, req.MustIncludeDeviceIDs, int(req.AllocationSize))
+			devices, err := plugin.selectPreferredDeviceIDsFromAnnotatedDevices(req.AvailableDeviceIDs, req.MustIncludeDeviceIDs, nonEmptyAnnotations[idx], int(req.AllocationSize))
+			if err == nil {
+				klog.V(5).Infof("selectPreferredDevice: %v", devices)
+				response.ContainerResponses = append(response.ContainerResponses, &kubeletdevicepluginv1beta1.ContainerPreferredAllocationResponse{
+					DeviceIDs: devices,
+				})
+			} else {
+				klog.Warningf("err: %v", err)
 			}
-		} else {
-			devices, err = plugin.rm.GetPreferredAllocation(req.AvailableDeviceIDs, req.MustIncludeDeviceIDs, int(req.AllocationSize))
 		}
-		if err != nil {
-			return nil, fmt.Errorf("error getting list of preferred allocation devices: %v", err)
-		}
-
-		response.ContainerResponses = append(response.ContainerResponses, &kubeletdevicepluginv1beta1.ContainerPreferredAllocationResponse{
-			DeviceIDs: devices,
-		})
 	}
 	return response, nil
 }
@@ -643,12 +636,15 @@ func (plugin *NvidiaDevicePlugin) Allocate(ctx context.Context, reqs *kubeletdev
 				podAllocationFailed(nodename, current, NodeLockNvidia)
 				return &kubeletdevicepluginv1beta1.AllocateResponse{}, errors.New("device number not matched")
 			}
-			alignedDevreq, err := plugin.alignContainerDevicesWithAllocatedIDs(devreq, reqs.ContainerRequests[idx].DevicesIds)
-			if err != nil {
-				podAllocationFailed(nodename, current, NodeLockNvidia)
-				return &kubeletdevicepluginv1beta1.AllocateResponse{}, err
+			if enableGetPreferredAllocation {
+				alignedDevreq, err := plugin.alignContainerDevicesWithAllocatedIDs(devreq, reqs.ContainerRequests[idx].DevicesIds)
+				if err != nil {
+					podAllocationFailed(nodename, current, NodeLockNvidia)
+					return &kubeletdevicepluginv1beta1.AllocateResponse{}, err
+				}
+				devreq = alignedDevreq
 			}
-			response, err := plugin.getAllocateResponse(plugin.GetContainerDeviceStrArray(alignedDevreq))
+			response, err := plugin.getAllocateResponse(plugin.GetContainerDeviceStrArray(devreq))
 			if err != nil {
 				return nil, fmt.Errorf("failed to get allocate response: %v", err)
 			}
@@ -660,11 +656,11 @@ func (plugin *NvidiaDevicePlugin) Allocate(ctx context.Context, reqs *kubeletdev
 			}
 
 			if plugin.operatingMode != "mig" {
-				for i, dev := range alignedDevreq {
+				for i, dev := range devreq {
 					limitKey := fmt.Sprintf("CUDA_DEVICE_MEMORY_LIMIT_%v", i)
 					response.Envs[limitKey] = fmt.Sprintf("%vm", dev.Usedmem)
 				}
-				response.Envs["CUDA_DEVICE_SM_LIMIT"] = fmt.Sprint(alignedDevreq[0].Usedcores)
+				response.Envs["CUDA_DEVICE_SM_LIMIT"] = fmt.Sprint(devreq[0].Usedcores)
 				response.Envs["CUDA_DEVICE_MEMORY_SHARED_CACHE"] = fmt.Sprintf("%s/vgpu/%v.cache", hostHookPath, uuid.New().String())
 				if *plugin.schedulerConfig.DeviceMemoryScaling > 1 {
 					response.Envs["CUDA_OVERSUBSCRIBE"] = "true"
