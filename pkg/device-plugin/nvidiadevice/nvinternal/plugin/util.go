@@ -451,7 +451,7 @@ func (nv *NvidiaDevicePlugin) GetContainerDeviceStrArray(c device.ContainerDevic
 				if nv.deviceListStrategies.Includes(spec.DeviceListStrategyVolumeMounts) ||
 					nv.deviceListStrategies.Includes(spec.DeviceListStrategyCDIAnnotations) ||
 					nv.deviceListStrategies.Includes(spec.DeviceListStrategyCDICRI) {
-					klog.V(3).Infoln("generage spec file")
+					klog.V(3).Infoln("generate CDI spec file")
 					if err := nv.cdiHandler.CreateSpecFile(); err != nil {
 						klog.Errorf("failed to create CDI spec file: %v", err)
 					}
