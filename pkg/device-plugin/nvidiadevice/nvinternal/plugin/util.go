@@ -24,6 +24,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
 	spec "github.com/NVIDIA/k8s-device-plugin/api/config/v1"
@@ -331,8 +332,9 @@ func (nv *NvidiaDevicePlugin) ApplyMigTemplate() {
 		klog.Error("marshal failed", err.Error())
 	}
 	klog.Infoln("Applying data=", string(data))
-	os.WriteFile("/tmp/migconfig.yaml", data, os.ModePerm)
-	cmd := exec.Command("nvidia-mig-parted", "apply", "-f", "/tmp/migconfig.yaml")
+	configFile := "/tmp/migconfig.yaml"
+	os.WriteFile(configFile, data, os.ModePerm)
+	cmd := exec.Command("nvidia-mig-parted", "apply", "-f", configFile)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -342,6 +344,24 @@ func (nv *NvidiaDevicePlugin) ApplyMigTemplate() {
 	}
 	outStr := stdout.String()
 	klog.Infoln("Mig apply", outStr)
+
+	// -------------------------
+	// Assert MIG config
+	// -------------------------
+	var assertErr error
+	klog.Infof("Running MIG assert")
+	assertCmd := exec.Command("nvidia-mig-parted", "assert", "-f", configFile)
+
+	var assertStdout, assertStderr bytes.Buffer
+	assertCmd.Stdout = &assertStdout
+	assertCmd.Stderr = &assertStderr
+
+	assertErr = assertCmd.Run()
+	if assertErr == nil {
+		klog.Infof("MIG assert successd: %s", assertStdout.String())
+	} else {
+		klog.Warningf("MIG assert failed: %v, stderr: %s", assertErr, assertStderr.String())
+	}
 }
 
 func (nv *NvidiaDevicePlugin) GenerateMigTemplate(devtype string, devindex int, val device.ContainerDevice) (int, bool) {
@@ -451,6 +471,9 @@ func (nv *NvidiaDevicePlugin) GetContainerDeviceStrArray(c device.ContainerDevic
 				if nv.deviceListStrategies.Includes(spec.DeviceListStrategyVolumeMounts) ||
 					nv.deviceListStrategies.Includes(spec.DeviceListStrategyCDIAnnotations) ||
 					nv.deviceListStrategies.Includes(spec.DeviceListStrategyCDICRI) {
+					// wait for /dev/nvidia-caps/nvidia-cap* to appear
+					// TODO check if /dev/nvidia-caps/nvidia-cap* exists
+					time.Sleep(10 * time.Second)
 					klog.V(3).Infoln("generate CDI spec file")
 					if err := nv.cdiHandler.CreateSpecFile(); err != nil {
 						klog.Errorf("failed to create CDI spec file: %v", err)
