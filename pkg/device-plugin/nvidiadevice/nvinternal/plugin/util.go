@@ -18,21 +18,24 @@ package plugin
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/NVIDIA/go-nvml/pkg/nvml"
 	spec "github.com/NVIDIA/k8s-device-plugin/api/config/v1"
-	"golang.org/x/net/context"
 	"gopkg.in/yaml.v3"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
+	"tags.cncf.io/container-device-interface/specs-go"
 
 	"github.com/Project-HAMi/HAMi/pkg/device"
 	"github.com/Project-HAMi/HAMi/pkg/device-plugin/nvidiadevice/nvinternal/info"
@@ -332,9 +335,8 @@ func (nv *NvidiaDevicePlugin) ApplyMigTemplate() {
 		klog.Error("marshal failed", err.Error())
 	}
 	klog.Infoln("Applying data=", string(data))
-	configFile := "/tmp/migconfig.yaml"
-	os.WriteFile(configFile, data, os.ModePerm)
-	cmd := exec.Command("nvidia-mig-parted", "apply", "-f", configFile)
+	os.WriteFile("/tmp/migconfig.yaml", data, os.ModePerm)
+	cmd := exec.Command("nvidia-mig-parted", "apply", "-f", "/tmp/migconfig.yaml")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -344,24 +346,6 @@ func (nv *NvidiaDevicePlugin) ApplyMigTemplate() {
 	}
 	outStr := stdout.String()
 	klog.Infoln("Mig apply", outStr)
-
-	// -------------------------
-	// Assert MIG config
-	// -------------------------
-	var assertErr error
-	klog.Infof("Running MIG assert")
-	assertCmd := exec.Command("nvidia-mig-parted", "assert", "-f", configFile)
-
-	var assertStdout, assertStderr bytes.Buffer
-	assertCmd.Stdout = &assertStdout
-	assertCmd.Stderr = &assertStderr
-
-	assertErr = assertCmd.Run()
-	if assertErr == nil {
-		klog.Infof("MIG assert successd: %s", assertStdout.String())
-	} else {
-		klog.Warningf("MIG assert failed: %v, stderr: %s", assertErr, assertStderr.String())
-	}
 }
 
 func (nv *NvidiaDevicePlugin) GenerateMigTemplate(devtype string, devindex int, val device.ContainerDevice) (int, bool) {
@@ -471,12 +455,34 @@ func (nv *NvidiaDevicePlugin) GetContainerDeviceStrArray(c device.ContainerDevic
 				if nv.deviceListStrategies.Includes(spec.DeviceListStrategyVolumeMounts) ||
 					nv.deviceListStrategies.Includes(spec.DeviceListStrategyCDIAnnotations) ||
 					nv.deviceListStrategies.Includes(spec.DeviceListStrategyCDICRI) {
-					// wait for /dev/nvidia-caps/nvidia-cap* to appear
-					// TODO check if /dev/nvidia-caps/nvidia-cap* exists
-					time.Sleep(10 * time.Second)
 					klog.V(3).Infoln("generate CDI spec file")
-					if err := nv.cdiHandler.CreateSpecFile(); err != nil {
-						klog.Errorf("failed to create CDI spec file: %v", err)
+					const (
+						maxTryTimes      = 5
+						waitTimeInterval = 5 * time.Second
+						specFilePath     = "/var/run/cdi/k8s.device-plugin.nvidia.com-gpu.json"
+						kind             = "k8s.device-plugin.nvidia.com/gpu"
+					)
+					for i := 0; i < maxTryTimes; i++ {
+						if err := createSpecFile(specFilePath); err != nil {
+							klog.Warningf("failed to create CDI spec file: %v", err)
+						} else {
+							klog.Infof("createSpecFile ok. file path %s", specFilePath)
+						}
+						if err := modifySpecKind(specFilePath, kind); err != nil {
+							klog.Warningf("failed to modify CDI spec file: %v", err)
+						}
+						if err := checkCDISpecFile(specFilePath, kind); err != nil {
+							klog.Warningf("check CDI spec file failed. %v", err)
+							if i == maxTryTimes-1 {
+								klog.Fatalf("exceed the max trytime %d", maxTryTimes)
+							} else {
+								time.Sleep(waitTimeInterval)
+								klog.Warningf("try to create CDI spec file again. try times: %d", i)
+								continue
+							}
+						}
+						klog.Infof("check CDI spec file ok")
+						break
 					}
 				}
 			}
@@ -523,4 +529,92 @@ func updatePodAnnotationsAndReleaseLock(nodeName string, pod *corev1.Pod, lockNa
 var podAllocationFailed = func(nodeName string, pod *corev1.Pod, lockName string) {
 	klog.Infof("Pod allocation failed for pod %s/%s on node %s", pod.Namespace, pod.Name, nodeName)
 	updatePodAnnotationsAndReleaseLock(nodeName, pod, lockName, util.DeviceBindFailed)
+}
+
+func checkCDISpecFile(filePath, kind string) error {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("fail to read file: %v", err)
+	}
+	var spec specs.Spec
+	if err := json.Unmarshal(data, &spec); err != nil {
+		return fmt.Errorf("fail to parse json: %v", err)
+	}
+	return checkCDISpec(spec, kind)
+}
+
+func checkCDISpec(spec specs.Spec, kind string) error {
+	if spec.Kind != kind {
+		return fmt.Errorf("kind mismatch. current: %s, expect: %s", spec.Kind, kind)
+	}
+	for _, device := range spec.Devices {
+		if strings.HasPrefix(device.Name, "MIG") {
+			if len(device.ContainerEdits.DeviceNodes) == 0 {
+				return fmt.Errorf("MIG device %s has no deviceNodes", device.Name)
+			}
+			containCap := false
+			for _, node := range device.ContainerEdits.DeviceNodes {
+				if strings.Contains(node.Path, "nvidia-cap") {
+					containCap = true
+					break
+				}
+			}
+			if !containCap {
+				return fmt.Errorf("MIG device %s does not have a corresponding nvidia-cap device", device.Name)
+			}
+		}
+	}
+	return nil
+}
+
+func createSpecFile(outputPath string) error {
+	nvidiaCtkPath := "/usrbin/nvidia-ctk"
+	if outputPath == "" {
+		outputPath = "/var/run/cdi/k8s.device-plugin.nvidia.com-gpu.json"
+	}
+	outputDir := filepath.Dir(outputPath)
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return fmt.Errorf("failed to create output directory %s: %v", outputDir, err)
+	}
+
+	args := []string{
+		"cdi",
+		"generate",
+		"--output", outputPath,
+	}
+
+	cmd := exec.Command(nvidiaCtkPath, args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to generate CDI spec file: %v\ncommand: nvidia-ctk %v\noutput: %s",
+			err, args, string(output))
+	}
+
+	if _, err := os.Stat(outputPath); err != nil {
+		return fmt.Errorf("spec file was not created at %s: %v", outputPath, err)
+	}
+	return nil
+}
+
+func modifySpecKind(filePath, kind string) error {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("fail to read file: %v", err)
+	}
+	var spec specs.Spec
+	if err := json.Unmarshal(data, &spec); err != nil {
+		return fmt.Errorf("fail to parse json: %v", err)
+	}
+	if spec.Kind == kind {
+		return nil
+	}
+	spec.Kind = kind
+	newData, err := json.MarshalIndent(spec, "", "  ")
+	if err != nil {
+		return fmt.Errorf("fail to marshal modified spec: %v", err)
+	}
+	if err := os.WriteFile(filePath, newData, 0644); err != nil {
+		return fmt.Errorf("fail to write modified spec: %v", err)
+	}
+	return nil
 }
