@@ -77,9 +77,10 @@ const (
 )
 
 var (
-	hostHookPath  string
-	ConfigFile    *string
-	getPendingPod = util.GetPendingPod
+	hostHookPath                 string
+	ConfigFile                   *string
+	getPendingPod                = util.GetPendingPod
+	enableGetPreferredAllocation bool
 )
 
 func init() {
@@ -142,6 +143,7 @@ func readFromConfigFile(sConfig *nvidia.NvidiaConfig, path string) (string, erro
 			if len(val.OperatingMode) > 0 {
 				mode = val.OperatingMode
 			}
+			enableGetPreferredAllocation = val.EnableGetPreferredAllocation
 			klog.Infof("FilterDevice: %v", val.FilterDevice)
 		}
 	}
@@ -421,7 +423,7 @@ func (plugin *NvidiaDevicePlugin) Register(kubeletSocket string) error {
 		Endpoint:     path.Base(plugin.socket),
 		ResourceName: string(plugin.rm.Resource()),
 		Options: &kubeletdevicepluginv1beta1.DevicePluginOptions{
-			GetPreferredAllocationAvailable: true,
+			GetPreferredAllocationAvailable: enableGetPreferredAllocation,
 		},
 	}
 
@@ -483,26 +485,17 @@ func (plugin *NvidiaDevicePlugin) GetPreferredAllocation(ctx context.Context, r 
 	}
 
 	for idx, req := range r.ContainerRequests {
-		var (
-			devices []string
-			err     error
-		)
-
 		if idx < len(nonEmptyAnnotations) {
-			devices, err = plugin.selectPreferredDeviceIDsFromAnnotatedDevices(req.AvailableDeviceIDs, req.MustIncludeDeviceIDs, nonEmptyAnnotations[idx], int(req.AllocationSize))
-			if err != nil {
-				devices, err = plugin.rm.GetPreferredAllocation(req.AvailableDeviceIDs, req.MustIncludeDeviceIDs, int(req.AllocationSize))
+			devices, err := plugin.selectPreferredDeviceIDsFromAnnotatedDevices(req.AvailableDeviceIDs, req.MustIncludeDeviceIDs, nonEmptyAnnotations[idx], int(req.AllocationSize))
+			if err == nil {
+				klog.V(5).Infof("selectPreferredDevice: %v", devices)
+				response.ContainerResponses = append(response.ContainerResponses, &kubeletdevicepluginv1beta1.ContainerPreferredAllocationResponse{
+					DeviceIDs: devices,
+				})
+			} else {
+				klog.Warningf("err: %v", err)
 			}
-		} else {
-			devices, err = plugin.rm.GetPreferredAllocation(req.AvailableDeviceIDs, req.MustIncludeDeviceIDs, int(req.AllocationSize))
 		}
-		if err != nil {
-			return nil, fmt.Errorf("error getting list of preferred allocation devices: %v", err)
-		}
-
-		response.ContainerResponses = append(response.ContainerResponses, &kubeletdevicepluginv1beta1.ContainerPreferredAllocationResponse{
-			DeviceIDs: devices,
-		})
 	}
 	return response, nil
 }
@@ -634,7 +627,7 @@ func (plugin *NvidiaDevicePlugin) Allocate(ctx context.Context, reqs *kubeletdev
 				podAllocationFailed(nodename, current, NodeLockNvidia)
 				return &kubeletdevicepluginv1beta1.AllocateResponse{}, errors.New("device number not matched")
 			}
-			if plugin.operatingMode != "mig" {
+			if enableGetPreferredAllocation && plugin.operatingMode != "mig" {
 				alignedDevreq, err := plugin.alignContainerDevicesWithAllocatedIDs(devreq, reqs.ContainerRequests[idx].DevicesIds)
 				if err != nil {
 					podAllocationFailed(nodename, current, NodeLockNvidia)

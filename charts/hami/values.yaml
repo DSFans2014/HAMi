@@ -351,7 +351,8 @@ devicePlugin:
             "filterdevices": {
               "uuid": [],
               "index": []
-            }
+            },
+            "enablegetpreferredallocation": false
           }
         ]
       }
