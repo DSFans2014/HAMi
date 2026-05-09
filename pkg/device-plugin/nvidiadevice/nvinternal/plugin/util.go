@@ -468,9 +468,6 @@ func (nv *NvidiaDevicePlugin) GetContainerDeviceStrArray(c device.ContainerDevic
 						} else {
 							klog.Infof("createSpecFile ok. file path %s", specFilePath)
 						}
-						if err := modifySpecKind(specFilePath, kind); err != nil {
-							klog.Warningf("failed to modify CDI spec file: %v", err)
-						}
 						if err := checkCDISpecFile(specFilePath, kind); err != nil {
 							klog.Warningf("check CDI spec file failed. %v", err)
 							if i == maxTryTimes-1 {
@@ -580,6 +577,7 @@ func createSpecFile(outputPath string) error {
 	args := []string{
 		"cdi",
 		"generate",
+		"--vendor", "k8s.device-plugin.nvidia.com",
 		"--output", outputPath,
 	}
 
@@ -592,29 +590,6 @@ func createSpecFile(outputPath string) error {
 
 	if _, err := os.Stat(outputPath); err != nil {
 		return fmt.Errorf("spec file was not created at %s: %v", outputPath, err)
-	}
-	return nil
-}
-
-func modifySpecKind(filePath, kind string) error {
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return fmt.Errorf("fail to read file: %v", err)
-	}
-	var spec specs.Spec
-	if err := json.Unmarshal(data, &spec); err != nil {
-		return fmt.Errorf("fail to parse json: %v", err)
-	}
-	if spec.Kind == kind {
-		return nil
-	}
-	spec.Kind = kind
-	newData, err := json.MarshalIndent(spec, "", "  ")
-	if err != nil {
-		return fmt.Errorf("fail to marshal modified spec: %v", err)
-	}
-	if err := os.WriteFile(filePath, newData, 0644); err != nil {
-		return fmt.Errorf("fail to write modified spec: %v", err)
 	}
 	return nil
 }
