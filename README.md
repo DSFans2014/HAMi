@@ -28,7 +28,7 @@ HAMi is a [CNCF Sandbox](https://www.cncf.io/sandbox-projects/) and [CNCF Landsc
 
 ## Why HAMi?
 
-AI infrastructure teams often run into the same Kubernetes accelerator problems: whole GPUs are allocated to small jobs, teams compete for scarce devices, different accelerator vendors expose different operational models, and schedulers lack enough device context to place workloads efficiently.
+AI infrastructure teams often run into the same Kubernetes accelerator problems: whole GPUs are allocated to small jobs, teams compete for scarce devices, different accelerator vendors expose different operational models, and schedulers lack enough device context to place workloads efficiently
 
 HAMi provides a Kubernetes-native layer for:
 
