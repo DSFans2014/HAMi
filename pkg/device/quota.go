@@ -21,6 +21,7 @@ import (
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
 )
 
@@ -33,6 +34,7 @@ type DeviceQuota map[string]*Quota
 
 type QuotaManager struct {
 	Quotas map[string]*DeviceQuota
+	podMap map[types.UID]struct{}
 	mutex  sync.RWMutex
 }
 
@@ -48,6 +50,7 @@ func NewQuotaManager() *QuotaManager {
 	once.Do(func() {
 		localCache = QuotaManager{
 			Quotas: make(map[string]*DeviceQuota),
+			podMap: make(map[types.UID]struct{}),
 		}
 	})
 	return &localCache
@@ -117,6 +120,9 @@ func (q *QuotaManager) AddUsage(pod *corev1.Pod, podDev PodDevices) {
 	}
 	q.mutex.Lock()
 	defer q.mutex.Unlock()
+	if _, ok := q.podMap[pod.UID]; ok {
+		return
+	}
 	if q.Quotas[pod.Namespace] == nil {
 		q.Quotas[pod.Namespace] = &DeviceQuota{}
 	}
@@ -134,6 +140,7 @@ func (q *QuotaManager) AddUsage(pod *corev1.Pod, podDev PodDevices) {
 		}
 		(*dp)[idx].Used += val
 	}
+	q.podMap[pod.UID] = struct{}{}
 	if klog.V(4).Enabled() {
 		for _, val := range q.Quotas {
 			for idx, val1 := range *val {
@@ -150,6 +157,9 @@ func (q *QuotaManager) RmUsage(pod *corev1.Pod, podDev PodDevices) {
 	}
 	q.mutex.Lock()
 	defer q.mutex.Unlock()
+	if _, ok := q.podMap[pod.UID]; !ok {
+		return
+	}
 	dp, ok := q.Quotas[pod.Namespace]
 	if !ok {
 		return
@@ -163,6 +173,7 @@ func (q *QuotaManager) RmUsage(pod *corev1.Pod, podDev PodDevices) {
 			}
 		}
 	}
+	delete(q.podMap, pod.UID)
 	if klog.V(4).Enabled() {
 		for _, val := range q.Quotas {
 			for idx, val1 := range *val {

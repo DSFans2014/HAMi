@@ -190,6 +190,13 @@ func TestAddUsageAndRmUsage(t *testing.T) {
 	if (*qm.Quotas[ns])[coreName].Used != 100 {
 		t.Errorf("AddUsage: expected Used core 100, got %d", (*qm.Quotas[ns])[coreName].Used)
 	}
+	qm.AddUsage(pod, podDev)
+	if (*qm.Quotas[ns])[memName].Used != 1000 {
+		t.Errorf("AddUsage: expected Used memory 1000, got %d", (*qm.Quotas[ns])[memName].Used)
+	}
+	if (*qm.Quotas[ns])[coreName].Used != 100 {
+		t.Errorf("AddUsage: expected Used core 100, got %d", (*qm.Quotas[ns])[coreName].Used)
+	}
 
 	qm.RmUsage(pod, podDev)
 	if (*qm.Quotas[ns])[memName].Used != 0 {
@@ -199,13 +206,12 @@ func TestAddUsageAndRmUsage(t *testing.T) {
 		t.Errorf("RmUsage: expected Used core 0, got %d", (*qm.Quotas[ns])[coreName].Used)
 	}
 
-	// remove more than tracked: Used must not go below zero
 	qm.RmUsage(pod, podDev)
-	if (*qm.Quotas[ns])[memName].Used < 0 {
-		t.Errorf("RmUsage: Used memory went negative: %d", (*qm.Quotas[ns])[memName].Used)
+	if (*qm.Quotas[ns])[memName].Used != 0 {
+		t.Errorf("RmUsage: expected Used memory 0, got %d", (*qm.Quotas[ns])[memName].Used)
 	}
-	if (*qm.Quotas[ns])[coreName].Used < 0 {
-		t.Errorf("RmUsage: Used core went negative: %d", (*qm.Quotas[ns])[coreName].Used)
+	if (*qm.Quotas[ns])[coreName].Used != 0 {
+		t.Errorf("RmUsage: expected Used core 0, got %d", (*qm.Quotas[ns])[coreName].Used)
 	}
 }
 
